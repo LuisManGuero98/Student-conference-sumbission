@@ -12,3 +12,11 @@ guiding robot movements, there is insufficient research on models for preventing
 during ultrasound imaging procedures. To address this challenge and avoid the need for ground-truth data, a RL
 approach was chosen. This allows the robot to learn how to avoid collisions in real time, even in the presence of
 patient movements.
+
+Libraries used:
+gym                             0.17.1
+gym-notices                     0.0.8
+torch                           2.5.1
+torchaudio                      2.0.1+cu118
+torchrl                         0.6.0
+torchvision                     0.20.1
