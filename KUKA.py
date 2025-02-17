@@ -11,27 +11,23 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 
 
-'''
-**************************************************************************
-
-Class contains functions to establish connection with the scene simulation 
-and perform all neccessary actions for a gym-type simulation.
-
-**************************************************************************
-'''
 
 
 class KUKA():
 
+    '''
+    **************************************************************************
 
-    # Contains functions to initialize the connection with Coppeliasim, as well as
-    # functions to move the robot joints, retrieve its camera vision sensor video
-    # and move the mannequin joints.
+    Class contains functions to establish connection with the scene simulation 
+    and perform all neccessary actions for a gym-type simulation.
 
-    # Also, contains environment functions to be able to work with PPO pytorch algorithm 
+    **************************************************************************
+    '''
 
     end_effector_name = '/tableKUKA/LBRiiwa7R800/link8_resp/link/Ultrasound_sensor'
 
+    # Robot
+    collection_kuka = []
     joints_count = 7
     links_count = 7
     joints_handles = [0] * joints_count
@@ -49,10 +45,13 @@ class KUKA():
     mann_ob_count = 4
     mannequin_object_targets = [0] * mann_ob_count
 
-    home_pos = [0,0,0,0,0,0,0]
+    home_pos = [0,0,0,-np.deg2rad(100),0,np.deg2rad(50),0]
 
     Juan = '/tableJuan/Juan'
-    
+
+    # Juan's Table
+    table_Juan_handles = [0] * 5
+
     # Goal handles
     chest_pos = '/tableJuan/Juan/Joint[2]/Group'
     left_arm_pos = '/tableJuan/Juan/Joint[2]/Joint[0]/Group'
@@ -67,13 +66,19 @@ class KUKA():
         self.client = RemoteAPIClient()
         self.sim = self.client.getObject('sim')
 
+        # Inverse Kinematics 
+        self.simIK = self.client.require('simIK')
+
         # Ultrasound handle 
         self.end_effector_handle = self.sim.getObject(self.end_effector_name)
 
         # Get vision sensor handle
         self.vision_sensor_handle = self.sim.getObject('/tableKUKA/LBRiiwa7R800/visionSensor')
+       
+        '''
+        Get KUKAs joints handles
+        '''
 
-        # Get KUKAs joints handles
         try: 
             for num in range(self.joints_count):
 
@@ -109,7 +114,14 @@ class KUKA():
         except:
             print('Could not get links handles') 
 
-        # Get mannequin handles
+        # Kuka collection handles
+        self.collection_kuka = self.sim.createCollection()
+        self.sim.addItemToCollection(self.collection_kuka, self.sim.handle_tree, self.sim.getObject('/tableKUKA/LBRiiwa7R800'), 0)
+
+        '''
+         Get mannequin handles
+        '''
+
 
         # Left leg
         self.mannequin_left_leg_handles[0] = self.sim.getObject('/tableJuan/Juan/Joint[0]') # Spherical
@@ -146,6 +158,19 @@ class KUKA():
 
         # Juan handle
         self.Juan_handle = self.sim.getObjectHandle(self.Juan)
+
+        # Mannequin collection
+        self.collection_man_handle = self.sim.createCollection()
+        self.sim.addItemToCollection(self.collection_man_handle, self.sim.handle_tree, self.sim.getObject('/tableJuan/Juan'), 0)
+
+        '''
+        Get table collection
+        '''
+
+        self.collection_table_Juan = self.sim.createCollection()
+        self.sim.addItemToCollection(self.collection_table_Juan, self.sim.handle_tree, self.sim.getObject('/tableJuan/table'), 0)
+        self.sim.addItemToCollection(self.collection_table_Juan, self.sim.handle_single, self.sim.getObject('/tableJuan/top'), 0)
+
 
         # KUKA home position
         self.move_joints(self.home_pos)
@@ -234,7 +259,7 @@ class KUKA():
 
         # Shows real time video image from the sensor
 
-        self.move_joints([0,0,0,-np.deg2rad(90),0,np.deg2rad(50),0])
+        self.move_joints(self.home_pos)
         # Set up the plot for live updating
         plt.ion()  # Enable interactive mode
         self.fig, self.ax = plt.subplots()
@@ -291,10 +316,15 @@ class KUKA():
         '''
         Moves KUKA given set of joints thetas
         '''
-
-        # Transform, if ndarray to python list, for Coppsm
         thetas_list = []
-        if isinstance(thetas, np.ndarray):
+        if isinstance(thetas, torch.Tensor):
+            # Converts tensor to list
+            thetas_copy = thetas.clone().detach() 
+            thetas_numpy = thetas_copy.numpy().flatten()
+            thetas_list = np.ndarray.tolist(thetas_numpy)
+
+        elif isinstance(thetas, np.ndarray):
+            # Transform, if ndarray to python list, for Coppsm
             thetas_list = np.ndarray.tolist(thetas)
         else:
             thetas_list = thetas
@@ -312,7 +342,7 @@ class KUKA():
 
         type_m = type_m if type_m is not None else 'one'
         
-        steps = 10
+        steps = 30
         delay = 0.04
 
         if type_m == 'all':
@@ -320,32 +350,37 @@ class KUKA():
             for i in range(self.mann_ob_count):
 
                 original_pos = self.sim.getObjectPosition(self.mannequin_object_targets[i])
-                current_pos = original_pos
+                current_pos = original_pos.copy()
                 
-                if i == 1 or i == 3:
-                    # Left arm position: 0.269984, 0.569823, 0.790344
+                if i == 1 or i == 3: # If any of the arms (Left arm position: 0.269984, 0.569823, 0.790344)
                     new_pos = current_pos.copy()
                     new_z = random.uniform(0.6, 0.9)
                     new_pos[2] = new_z
-                else:
+                else: # Legs
                     new_pos = np.random.uniform(0.3,0.7,3)
 
                 for j in np.linspace(0, 1, steps):
 
                     # Move to new position
+                    move_to = [current_pos[k] + j * (new_pos[k] - current_pos[k]) for k in range(3)]
                     self.sim.setObjectPosition(
                         self.mannequin_object_targets[i], 
-                        [current_pos[k] + j * (new_pos[k] - current_pos[k]) for k in range(3)]
+                        move_to
                     )    
-                    collision, _ = self.sim.checkCollision(self.mannequin_object_targets[i], self.sim.handle_all)
-                    if collision == 1:
-                        print("Collision") 
+
+                    # Check if collision with table
+                    collision, _ = self.sim.checkCollision(self.collection_man_handle, self.collection_table_Juan)
+                    if collision > 0:
+                        # stop current movement and return to original
+                        for k in range(3):
+                            new_pos[k] = move_to[k]
+                        break
+
                     time.sleep(delay)
 
                 time.sleep(0.5)
 
                 for j in np.linspace(0, 1, steps):
-
                     # Return to original position
                     self.sim.setObjectPosition(
                         self.mannequin_object_targets[i],
@@ -358,7 +393,7 @@ class KUKA():
             # Randomly move only one part
             rand_object = np.random.randint(0,3)
             original_pos = self.sim.getObjectPosition(self.mannequin_object_targets[rand_object])
-            current_pos = original_pos
+            current_pos = original_pos.copy()
                 
             if rand_object == 1 or rand_object == 3:
                 # Left arm position: 0.269984, 0.569823, 0.790344
@@ -368,20 +403,34 @@ class KUKA():
             else:
                 new_pos = np.random.uniform(0.3,0.7,3)
 
+            # print('new pose: ', new_pos)
             for j in np.linspace(0, 1, steps):
 
                 # Move to new position
+                move_to = [current_pos[k] + j * (new_pos[k] - current_pos[k]) for k in range(3)]
+                # print('moving to: ', move_to)
                 self.sim.setObjectPosition(
                     self.mannequin_object_targets[rand_object], 
-                    [current_pos[k] + j * (new_pos[k] - current_pos[k]) for k in range(3)]
+                    move_to
                 )
+
+                # Check if collision with table
+                collision, _ = self.sim.checkCollision(self.collection_man_handle, self.collection_table_Juan)
+                if collision > 0:
+                    # stop current movement and return to original
+                    # print('Previous new pos: ', new_pos)
+                    for k in range(3):
+                        new_pos[k] = move_to[k]
+                    # print('Collision, new pos: ', new_pos)
+                    break
                 time.sleep(delay)
                 
-            # time.sleep(0.5)
+            time.sleep(0.1)
 
             for j in np.linspace(0, 1, steps):
 
                 # Return to original position
+                # print('back to: ',[new_pos[k] + j * (original_pos[k] - new_pos[k]) for k in range(3)])
                 self.sim.setObjectPosition(
                     self.mannequin_object_targets[rand_object],
                     [new_pos[k] + j * (original_pos[k] - new_pos[k]) for k in range(3)]
@@ -404,11 +453,14 @@ class KUKA():
         Used for observation of the environment.
         '''
         
-        image, _ = self.vs_data() # Coppsm -> byte img [-128, 127]
-        image = self.sim.unpackUInt8Table(image) # byte img -> uint8 [0, 255]
-        im = torch.tensor(image, dtype=float) 
-
-        return im
+        image, resolution = self.vs_data() # Coppsm -> byte img [-128, 127]
+        image_int = self.sim.unpackUInt8Table(image) # byte img -> uint8 [0, 255]
+        image_array = np.array(image_int, dtype=np.float32).reshape((resolution[1], resolution[0], 3)) # reshape
+        image_array = image_array[:, :, [2, 1, 0]] # Convert from BGR to RGB
+        image = torch.from_numpy(image_array)
+        image = image.permute(2, 0, 1).unsqueeze(0)
+        
+        return image
     
     def joints_positions(self):
         
@@ -434,7 +486,7 @@ class KUKA():
 
         position = self.sim.getObjectPosition(object_handle, self.goal_point) # Cambiar goal point o handle
 
-        return position
+        return torch.tensor(position, dtype=float)
 
     # def links_positions(self):
         
@@ -492,14 +544,48 @@ class KUKA():
     def collisions(self):
         
         '''
-        Detects if robot collides with mannequin
+        Detects if robot collides with mannequin or the mannequins table
         Used for reward function.
         '''
+        # Collision between KUKA and mannequin
+        kuka_man, _ = self.sim.checkCollision(
+            self.collection_kuka, self.collection_man_handle
+        )
 
-        collision = 0
-        for i in range(self.joints_count):
-            for j in range(self.arm_handles_count):
-                state = self.sim.checkCollision(self.joints_handles[i], self.mannequin_left_arm_handles[j])
-                collision = collision + 1 if state == 1 else collision
-        
+        kuka_table, _ = self.sim.checkCollision(
+            self.collection_kuka, self.collection_table_Juan
+        )
+
+        collision = 1 if kuka_man > 0 or kuka_table > 0 else 0
+
         return collision
+    
+    def InvKin(self):
+
+        '''
+        Performs the inverse kinematics given the objective goal coordinates
+        '''
+
+        kuka_base = self.links_handles[0]
+        # kuka_tip = self.end_effector_handle
+        kuka_tip = self.sim.getObject('/tableKUKA/LBRiiwa7R800/kukaTip')
+        target = self.goal_handle
+        ikEnv = self.simIK.createEnvironment()
+        # print(f"kuka_base: {kuka_base}, kuka_tip: {kuka_tip}, target: {target}")
+
+        # Undamped method
+        ikGroup_undamped = self.simIK.createGroup(ikEnv)
+        self.simIK.setGroupCalculation(ikEnv, ikGroup_undamped, self.simIK.method_pseudo_inverse, 0, 6)
+        self.simIK.addElementFromScene(ikEnv, ikGroup_undamped, kuka_base, kuka_tip, target, self.simIK.constraint_pose)
+
+        # Damped Least Squares method
+        ikGroup_damped = self.simIK.createGroup(ikEnv)
+        self.simIK.setGroupCalculation(ikEnv, ikGroup_damped, self.simIK.method_damped_least_squares, 1, 99)
+        self.simIK.addElementFromScene(ikEnv, ikGroup_damped, kuka_base, kuka_tip, target, self.simIK.constraint_pose)
+
+        res, *_ = self.simIK.handleGroup(ikEnv, ikGroup_undamped, {'syncWorlds': True})
+        if res != self.simIK.result_success:
+            self.simIK.handleGroup(ikEnv, self.ikGroup_damped, {'syncWorlds': True})
+            self.sim.addLog(self.sim.verbosity_scriptwarnings, "IK solver failed.")
+
+        
